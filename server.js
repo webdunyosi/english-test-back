@@ -18,9 +18,28 @@ const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_key_123';
 app.use(cors());
 app.use(express.json());
 
-// Database Connection
+// Database Connection & Admin Seeding
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/english-test')
-  .then(() => console.log('Connected to MongoDB'))
+  .then(async () => {
+    console.log('Connected to MongoDB');
+    try {
+      const adminExists = await User.findOne({ username: 'admin' });
+      if (!adminExists) {
+        const hashedPassword = await bcrypt.hash('admin123', 10);
+        const defaultAdmin = new User({
+          username: 'admin',
+          password: hashedPassword,
+          role: 'admin',
+          isApproved: true,
+          group: ''
+        });
+        await defaultAdmin.save();
+        console.log('Default admin seeded: admin / admin123');
+      }
+    } catch (err) {
+      console.error('Error seeding admin user:', err);
+    }
+  })
   .catch((err) => console.error('MongoDB connection error:', err));
 
 // Routes
