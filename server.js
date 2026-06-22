@@ -4,6 +4,7 @@ const cors = require('cors');
 require('dotenv').config();
 
 const TestQuestion = require('./models/TestQuestion');
+const TestResult = require('./models/TestResult');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -37,6 +38,30 @@ app.post('/api/questions', async (req, res) => {
   } catch (error) {
     console.error('Error creating question:', error);
     res.status(400).json({ message: 'Error creating question', error: error.message });
+  }
+});
+
+// Leaderboard routes
+app.get('/api/results', async (req, res) => {
+  try {
+    // Eng yuqori ball to'plaganlarni olish (masalan top 10 ta)
+    const results = await TestResult.find().sort({ score: -1, date: -1 }).limit(50);
+    res.json(results);
+  } catch (error) {
+    console.error('Error fetching results:', error);
+    res.status(500).json({ message: 'Server error fetching results' });
+  }
+});
+
+app.post('/api/results', async (req, res) => {
+  try {
+    const { userName, score, totalQuestions } = req.body;
+    const newResult = new TestResult({ userName, score, totalQuestions });
+    const savedResult = await newResult.save();
+    res.status(201).json(savedResult);
+  } catch (error) {
+    console.error('Error saving result:', error);
+    res.status(400).json({ message: 'Error saving result', error: error.message });
   }
 });
 
