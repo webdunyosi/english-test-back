@@ -42,21 +42,48 @@ app.post('/api/auth/register', async (req, res) => {
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
+    // Auto-approve if username is "admin"
+    const isAdmin = username.trim().toLowerCase() === 'admin';
+
     // Create user
     const newUser = new User({
       username: username.trim(),
-      password: hashedPassword
+      password: hashedPassword,
+      role: isAdmin ? 'admin' : 'student',
+      isApproved: isAdmin ? true : false,
+      group: ''
     });
     await newUser.save();
 
-    // Generate JWT
-    const token = jwt.sign({ id: newUser._id, username: newUser.username }, JWT_SECRET, { expiresIn: '7d' });
+    if (isAdmin) {
+      // Generate JWT for admin
+      const token = jwt.sign(
+        { id: newUser._id, username: newUser.username, role: newUser.role },
+        JWT_SECRET,
+        { expiresIn: '7d' }
+      );
 
+      return res.status(201).json({
+        token,
+        user: {
+          id: newUser._id,
+          username: newUser.username,
+          role: newUser.role,
+          isApproved: newUser.isApproved,
+          group: newUser.group
+        }
+      });
+    }
+
+    // For student: no token, requires approval
     res.status(201).json({
-      token,
+      message: 'Ro\'yxatdan muvaffaqiyatli o\'tdingiz. Admin tasdiqlashini kuting!',
       user: {
         id: newUser._id,
-        username: newUser.username
+        username: newUser.username,
+        role: newUser.role,
+        isApproved: false,
+        group: ''
       }
     });
   } catch (error) {
@@ -84,14 +111,28 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ message: 'Foydalanuvchi topilmadi yoki parol noto\'g\'ri' });
     }
 
+    // Check if user is approved (unless they are admin)
+    if (user.role !== 'admin' && !user.isApproved) {
+      return res.status(403).json({ 
+        message: 'Hisobingiz hali admin tomonidan tasdiqlanmagan. Iltimos, kutib turing!' 
+      });
+    }
+
     // Generate JWT
-    const token = jwt.sign({ id: user._id, username: user.username }, JWT_SECRET, { expiresIn: '7d' });
+    const token = jwt.sign(
+      { id: user._id, username: user.username, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
 
     res.json({
       token,
       user: {
         id: user._id,
-        username: user.username
+        username: user.username,
+        role: user.role,
+        isApproved: user.isApproved,
+        group: user.group
       }
     });
   } catch (error) {
@@ -99,6 +140,89 @@ app.post('/api/auth/login', async (req, res) => {
     res.status(500).json({ message: 'Serverda xatolik yuz berdi' });
   }
 });
+
+// Admin Auth Middleware
+const adminAuth = (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return res.status(401).json({ message: 'Avtorizatsiyadan o\'tilmagan' });
+    }
+    const token = authHeader.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ message: 'Avtorizatsiyadan o\'tilmagan' });
+    }
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (decoded.role !== 'admin') {
+      return res.status(403).json({ message: 'Ushbu amalni bajarishga huquqingiz yo\'q' });
+    }
+    req.user = decoded;
+    next();
+  } catch (error) {
+    console.error('Admin Auth Error:', error);
+    return res.status(401).json({ message: 'Yaroqsiz token' });
+  }
+};
+
+// Admin Endpoints
+app.get('/api/admin/users', adminAuth, async (req, res) => {
+  try {
+    const users = await User.find({}, '-password').sort({ createdAt: -1 });
+    res.json(users);
+  } catch (error) {
+    console.error('Error fetching users:', error);
+    res.status(500).json({ message: 'Foydalanuvchilarni yuklashda xatolik' });
+  }
+});
+
+app.put('/api/admin/users/:id/approve', adminAuth, async (req, res) => {
+  try {
+    const { group } = req.body;
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ message: 'Foydalanuvchi topilmadi' });
+    }
+    user.isApproved = true;
+    user.group = group || '';
+    await user.save();
+    res.json({ message: 'Foydalanuvchi muvaffaqiyatli tasdiqlandi', user });
+  } catch (error) {
+    console.error('Error approving user:', error);
+    res.status(500).json({ message: 'Tasdiqlashda xatolik yuz berdi' });
+  }
+});
+
+app.delete('/api/admin/users/:id', adminAuth, async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ message: 'Foydalanuvchi topilmadi' });
+    }
+    if (user.username.toLowerCase() === 'admin') {
+      return res.status(400).json({ message: 'Asosiy adminni o\'chirib bo\'lmaydi' });
+    }
+    await User.findByIdAndDelete(req.params.id);
+    res.json({ message: 'Foydalanuvchi muvaffaqiyatli o\'chirildi' });
+  } catch (error) {
+    console.error('Error deleting user:', error);
+    res.status(500).json({ message: 'O\'chirishda xatolik yuz berdi' });
+  }
+});
+
+app.delete('/api/questions/:id', adminAuth, async (req, res) => {
+  try {
+    const question = await TestQuestion.findById(req.params.id);
+    if (!question) {
+      return res.status(404).json({ message: 'Savol topilmadi' });
+    }
+    await TestQuestion.findByIdAndDelete(req.params.id);
+    res.json({ message: 'Savol muvaffaqiyatli o\'chirildi' });
+  } catch (error) {
+    console.error('Error deleting question:', error);
+    res.status(500).json({ message: 'Savolni o\'chirishda xatolik' });
+  }
+});
+
 
 app.get('/api/questions', async (req, res) => {
   try {
@@ -110,7 +234,7 @@ app.get('/api/questions', async (req, res) => {
   }
 });
 
-app.post('/api/questions', async (req, res) => {
+app.post('/api/questions', adminAuth, async (req, res) => {
   try {
     const { question, options, correctAnswer } = req.body;
     const newQuestion = new TestQuestion({ question, options, correctAnswer });
