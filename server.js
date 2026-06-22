@@ -1,13 +1,18 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 const TestQuestion = require('./models/TestQuestion');
 const TestResult = require('./models/TestResult');
+const User = require('./models/User');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_key_123';
+
 
 // Middleware
 app.use(cors());
@@ -19,6 +24,82 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/english-t
   .catch((err) => console.error('MongoDB connection error:', err));
 
 // Routes
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ message: 'Username va password kiritilishi shart' });
+    }
+    
+    // Check if user already exists (case-insensitive)
+    const existingUser = await User.findOne({ 
+      username: { $regex: new RegExp('^' + username.trim() + '$', 'i') } 
+    });
+    if (existingUser) {
+      return res.status(400).json({ message: 'Foydalanuvchi nomi band' });
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create user
+    const newUser = new User({
+      username: username.trim(),
+      password: hashedPassword
+    });
+    await newUser.save();
+
+    // Generate JWT
+    const token = jwt.sign({ id: newUser._id, username: newUser.username }, JWT_SECRET, { expiresIn: '7d' });
+
+    res.status(201).json({
+      token,
+      user: {
+        id: newUser._id,
+        username: newUser.username
+      }
+    });
+  } catch (error) {
+    console.error('Error during registration:', error);
+    res.status(500).json({ message: 'Serverda xatolik yuz berdi' });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ message: 'Username va password kiritilishi shart' });
+    }
+
+    const user = await User.findOne({ 
+      username: { $regex: new RegExp('^' + username.trim() + '$', 'i') } 
+    });
+    if (!user) {
+      return res.status(400).json({ message: 'Foydalanuvchi topilmadi yoki parol noto\'g\'ri' });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ message: 'Foydalanuvchi topilmadi yoki parol noto\'g\'ri' });
+    }
+
+    // Generate JWT
+    const token = jwt.sign({ id: user._id, username: user.username }, JWT_SECRET, { expiresIn: '7d' });
+
+    res.json({
+      token,
+      user: {
+        id: user._id,
+        username: user.username
+      }
+    });
+  } catch (error) {
+    console.error('Error during login:', error);
+    res.status(500).json({ message: 'Serverda xatolik yuz berdi' });
+  }
+});
+
 app.get('/api/questions', async (req, res) => {
   try {
     const questions = await TestQuestion.find();
