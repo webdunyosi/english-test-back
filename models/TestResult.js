@@ -11,6 +11,10 @@ const testResultSchema = new mongoose.Schema({
     trim: true,
     default: 'General Test'
   },
+  isOlympiad: {
+    type: Boolean,
+    default: false
+  },
   score: {
     type: Number,
     required: true,

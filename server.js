@@ -37,8 +37,28 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/english-t
         await defaultAdmin.save();
         console.log('Default admin seeded: admin / admin123');
       }
+
+      // Database migration for existing TestResult entries
+      const migrateResults = async () => {
+        try {
+          const resultsToMigrate = await TestResult.find({ isOlympiad: { $exists: false } });
+          if (resultsToMigrate.length > 0) {
+            console.log(`Migrating ${resultsToMigrate.length} test results...`);
+            for (const res of resultsToMigrate) {
+              const question = await TestQuestion.findOne({ testName: res.testName });
+              res.isOlympiad = question ? !!question.isOlympiad : false;
+              await res.save();
+            }
+            console.log('Migration complete!');
+          }
+        } catch (err) {
+          console.error('Migration error:', err);
+        }
+      };
+      await migrateResults();
+
     } catch (err) {
-      console.error('Error seeding admin user:', err);
+      console.error('Error seeding admin user or migrating:', err);
     }
   })
   .catch((err) => console.error('MongoDB connection error:', err));
@@ -478,22 +498,33 @@ app.get('/api/results', async (req, res) => {
     // Get all approved students
     const students = await User.find({ role: 'student', isApproved: true });
     
-    // Get test results filtered by testName if provided
-    const resultsQuery = testName ? { testName } : {};
-    const results = await TestResult.find(resultsQuery);
+    // Get all test results (overall) to compute total website attempts
+    const allResults = await TestResult.find({});
+    
+    // Get test results for the score calculation (only Olympiad tests, or a specific testName)
+    let scoreQuery = { isOlympiad: true };
+    if (testName) {
+      scoreQuery = { testName };
+    }
+    const scoreResults = await TestResult.find(scoreQuery);
     
     // Map results to each student
     const leaderboard = students.map(student => {
-      // Find all results for this student (case-insensitive username matching)
-      const studentResults = results.filter(r => r.userName.toLowerCase() === student.username.toLowerCase());
+      const studentUsername = student.username.toLowerCase();
       
-      if (studentResults.length > 0) {
+      // Total attempts on the entire site
+      const totalAttempts = allResults.filter(r => r.userName.toLowerCase() === studentUsername).length;
+      
+      // Results for score calculation
+      const studentScoreResults = scoreResults.filter(r => r.userName.toLowerCase() === studentUsername);
+      
+      if (studentScoreResults.length > 0) {
         // Find highest score result. If scores are equal, pick the most recent one.
-        const bestResult = studentResults.reduce((best, current) => {
+        const bestResult = studentScoreResults.reduce((best, current) => {
           if (current.score > best.score) return current;
           if (current.score === best.score && new Date(current.date) > new Date(best.date)) return current;
           return best;
-        }, studentResults[0]);
+        }, studentScoreResults[0]);
 
         return {
           _id: student._id,
@@ -502,7 +533,7 @@ app.get('/api/results', async (req, res) => {
           score: bestResult.score,
           totalQuestions: bestResult.totalQuestions,
           date: bestResult.date,
-          attemptsCount: studentResults.length,
+          attemptsCount: totalAttempts, // Show total overall attempts
           hasTakenTest: true
         };
       } else {
@@ -513,7 +544,7 @@ app.get('/api/results', async (req, res) => {
           score: 0,
           totalQuestions: 0,
           date: null,
-          attemptsCount: 0,
+          attemptsCount: totalAttempts, // Show total overall attempts
           hasTakenTest: false
         };
       }
@@ -543,15 +574,21 @@ app.get('/api/results', async (req, res) => {
   }
 });
 
+
 app.post('/api/results', async (req, res) => {
   try {
     const { userName, testName, score, totalQuestions } = req.body;
     if (!testName || !testName.trim()) {
       return res.status(400).json({ message: 'Test nomi kiritilishi shart' });
     }
+
+    const questionSample = await TestQuestion.findOne({ testName: testName.trim() });
+    const isOlympiad = questionSample ? !!questionSample.isOlympiad : false;
+
     const newResult = new TestResult({ 
       userName, 
       testName: testName.trim(), 
+      isOlympiad,
       score, 
       totalQuestions 
     });
@@ -562,6 +599,7 @@ app.post('/api/results', async (req, res) => {
     res.status(400).json({ message: 'Error saving result', error: error.message });
   }
 });
+
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
