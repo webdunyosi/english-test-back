@@ -415,7 +415,8 @@ app.get('/api/tests', async (req, res) => {
           _id: "$testName", 
           questionCount: { $sum: 1 },
           isOlympiad: { $first: "$isOlympiad" },
-          password: { $first: "$password" }
+          password: { $first: "$password" },
+          createdAt: { $min: "$createdAt" }
         } 
       }
     ]);
@@ -423,7 +424,8 @@ app.get('/api/tests', async (req, res) => {
       name: item._id || 'General Test',
       questionCount: item.questionCount,
       isOlympiad: !!item.isOlympiad,
-      hasPassword: !!(item.password && item.password.trim() !== '')
+      hasPassword: !!(item.password && item.password.trim() !== ''),
+      createdAt: item.createdAt
     })).sort((a, b) => a.name.localeCompare(b.name));
     res.json(tests);
   } catch (error) {
@@ -431,6 +433,56 @@ app.get('/api/tests', async (req, res) => {
     res.status(500).json({ message: 'Testlarni yuklashda xatolik yuz berdi' });
   }
 });
+
+// Notifications endpoint (for authenticated students and admins)
+app.get('/api/notifications', auth, async (req, res) => {
+  try {
+    const { since } = req.query; // ISO date string
+    const sinceDate = since ? new Date(since) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000); // last 7 days
+
+    // New tests added since date
+    const newTestNames = await TestQuestion.aggregate([
+      { $match: { createdAt: { $gte: sinceDate } } },
+      {
+        $group: {
+          _id: "$testName",
+          createdAt: { $min: "$createdAt" }
+        }
+      },
+      { $sort: { createdAt: -1 } }
+    ]);
+
+    // New approved students since date
+    const newStudents = await User.find({
+      role: 'student',
+      isApproved: true,
+      createdAt: { $gte: sinceDate }
+    }, 'username group createdAt').sort({ createdAt: -1 });
+
+    const notifications = [
+      ...newTestNames.map(t => ({
+        id: `test_${t._id}`,
+        type: 'test',
+        title: "Yangi test qo'shildi",
+        body: t._id,
+        time: t.createdAt
+      })),
+      ...newStudents.map(u => ({
+        id: `user_${u._id}`,
+        type: 'user',
+        title: "Yangi o'quvchi qo'shildi",
+        body: u.username + (u.group ? ` (${u.group})` : ''),
+        time: u.createdAt
+      }))
+    ].sort((a, b) => new Date(b.time) - new Date(a.time));
+
+    res.json(notifications);
+  } catch (error) {
+    console.error('Notifications error:', error);
+    res.status(500).json({ message: 'Bildirishnomalarni yuklashda xatolik' });
+  }
+});
+
 
 app.get('/api/questions', async (req, res) => {
   try {
