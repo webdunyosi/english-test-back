@@ -8,6 +8,7 @@ require('dotenv').config();
 const TestQuestion = require('./models/TestQuestion');
 const TestResult = require('./models/TestResult');
 const User = require('./models/User');
+const Group = require('./models/Group');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -228,6 +229,75 @@ app.delete('/api/admin/users/:id', adminAuth, async (req, res) => {
   }
 });
 
+// Admin Group Management Endpoints
+app.get('/api/admin/groups', adminAuth, async (req, res) => {
+  try {
+    const groups = await Group.find().sort({ createdAt: -1 });
+    res.json(groups);
+  } catch (error) {
+    console.error('Error fetching groups:', error);
+    res.status(500).json({ message: 'Guruhlarni yuklashda xatolik yuz berdi' });
+  }
+});
+
+app.post('/api/admin/groups', adminAuth, async (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ message: 'Guruh nomi kiritilishi shart' });
+    }
+    
+    // Check if group already exists (case-insensitive)
+    const existingGroup = await Group.findOne({ 
+      name: { $regex: new RegExp('^' + name.trim() + '$', 'i') } 
+    });
+    if (existingGroup) {
+      return res.status(400).json({ message: 'Ushbu nomdagi guruh allaqachon mavjud' });
+    }
+
+    const newGroup = new Group({ name: name.trim() });
+    await newGroup.save();
+    res.status(201).json(newGroup);
+  } catch (error) {
+    console.error('Error creating group:', error);
+    res.status(500).json({ message: 'Guruh yaratishda xatolik yuz berdi' });
+  }
+});
+
+app.delete('/api/admin/groups/:id', adminAuth, async (req, res) => {
+  try {
+    const group = await Group.findById(req.params.id);
+    if (!group) {
+      return res.status(404).json({ message: 'Guruh topilmadi' });
+    }
+
+    // Set group empty string for all users of this group
+    await User.updateMany({ group: group.name }, { group: '' });
+
+    await Group.findByIdAndDelete(req.params.id);
+    res.json({ message: 'Guruh muvaffaqiyatli o\'chirildi va uning a\'zolari guruhsiz qilindi' });
+  } catch (error) {
+    console.error('Error deleting group:', error);
+    res.status(500).json({ message: 'Guruhni o\'chirishda xatolik yuz berdi' });
+  }
+});
+
+app.put('/api/admin/users/:id/group', adminAuth, async (req, res) => {
+  try {
+    const { group } = req.body;
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ message: 'Foydalanuvchi topilmadi' });
+    }
+    user.group = group || '';
+    await user.save();
+    res.json({ message: 'O\'quvchi guruhi muvaffaqiyatli yangilandi', user });
+  } catch (error) {
+    console.error('Error updating user group:', error);
+    res.status(500).json({ message: 'O\'quvchi guruhini yangilashda xatolik yuz berdi' });
+  }
+});
+
 app.delete('/api/questions/:id', adminAuth, async (req, res) => {
   try {
     const question = await TestQuestion.findById(req.params.id);
@@ -268,9 +338,65 @@ app.post('/api/questions', adminAuth, async (req, res) => {
 // Leaderboard routes
 app.get('/api/results', async (req, res) => {
   try {
-    // Eng yuqori ball to'plaganlarni olish (masalan top 10 ta)
-    const results = await TestResult.find().sort({ score: -1, date: -1 }).limit(50);
-    res.json(results);
+    // Get all approved students
+    const students = await User.find({ role: 'student', isApproved: true });
+    
+    // Get all test results
+    const results = await TestResult.find();
+    
+    // Map results to each student
+    const leaderboard = students.map(student => {
+      // Find all results for this student (case-insensitive username matching)
+      const studentResults = results.filter(r => r.userName.toLowerCase() === student.username.toLowerCase());
+      
+      if (studentResults.length > 0) {
+        // Find highest score result. If scores are equal, pick the most recent one.
+        const bestResult = studentResults.reduce((best, current) => {
+          if (current.score > best.score) return current;
+          if (current.score === best.score && new Date(current.date) > new Date(best.date)) return current;
+          return best;
+        }, studentResults[0]);
+
+        return {
+          _id: student._id,
+          userName: student.username,
+          group: student.group || '',
+          score: bestResult.score,
+          totalQuestions: bestResult.totalQuestions,
+          date: bestResult.date,
+          hasTakenTest: true
+        };
+      } else {
+        return {
+          _id: student._id,
+          userName: student.username,
+          group: student.group || '',
+          score: 0,
+          totalQuestions: 0,
+          date: null,
+          hasTakenTest: false
+        };
+      }
+    });
+
+    // Sort leaderboard: highest score first.
+    // If scores are equal: those who took the test are ranked higher than those who haven't.
+    // If both have taken the test and have equal score, sort by newer date.
+    // If neither took the test or same date/score, sort alphabetically.
+    leaderboard.sort((a, b) => {
+      if (b.score !== a.score) {
+        return b.score - a.score;
+      }
+      if (a.hasTakenTest !== b.hasTakenTest) {
+        return a.hasTakenTest ? -1 : 1;
+      }
+      if (a.hasTakenTest && b.hasTakenTest) {
+        return new Date(b.date) - new Date(a.date);
+      }
+      return a.userName.localeCompare(b.userName);
+    });
+
+    res.json(leaderboard);
   } catch (error) {
     console.error('Error fetching results:', error);
     res.status(500).json({ message: 'Server error fetching results' });
