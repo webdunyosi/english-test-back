@@ -392,6 +392,7 @@ app.get('/api/results', async (req, res) => {
           score: bestResult.score,
           totalQuestions: bestResult.totalQuestions,
           date: bestResult.date,
+          attemptsCount: studentResults.length,
           hasTakenTest: true
         };
       } else {
@@ -402,6 +403,7 @@ app.get('/api/results', async (req, res) => {
           score: 0,
           totalQuestions: 0,
           date: null,
+          attemptsCount: 0,
           hasTakenTest: false
         };
       }
