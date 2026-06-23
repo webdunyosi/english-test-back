@@ -1,6 +1,12 @@
 const mongoose = require('mongoose');
 
 const testQuestionSchema = new mongoose.Schema({
+  testName: {
+    type: String,
+    required: true,
+    trim: true,
+    default: 'General Test'
+  },
   question: {
     type: String,
     required: true,
