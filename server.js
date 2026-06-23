@@ -184,6 +184,51 @@ const adminAuth = (req, res, next) => {
   }
 };
 
+// General Auth Middleware (for both student and admin)
+const auth = (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return res.status(401).json({ message: 'Avtorizatsiyadan o\'tilmagan' });
+    }
+    const token = authHeader.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ message: 'Avtorizatsiyadan o\'tilmagan' });
+    }
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    console.error('Auth Error:', error);
+    return res.status(401).json({ message: 'Yaroqsiz token' });
+  }
+};
+
+// User Change Password Endpoint
+app.put('/api/auth/change-password', auth, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ message: 'Joriy va yangi parollarni kiriting' });
+    }
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: 'Foydalanuvchi topilmadi' });
+    }
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ message: 'Joriy parol noto\'g\'ri' });
+    }
+    user.password = await bcrypt.hash(newPassword, 10);
+    await user.save();
+    res.json({ message: 'Parol muvaffaqiyatli o\'zgartirildi' });
+  } catch (error) {
+    console.error('Change password error:', error);
+    res.status(500).json({ message: 'Serverda xatolik yuz berdi' });
+  }
+});
+
+
 // Admin Endpoints
 app.get('/api/admin/users', adminAuth, async (req, res) => {
   try {
@@ -312,15 +357,53 @@ app.delete('/api/questions/:id', adminAuth, async (req, res) => {
   }
 });
 
+// Admin Test Settings Endpoint (to toggle Olympiad status & change password of an entire test group)
+app.put('/api/admin/tests/settings', adminAuth, async (req, res) => {
+  try {
+    const { testName, isOlympiad, password } = req.body;
+    if (!testName) {
+      return res.status(400).json({ message: 'Test nomi kiritilishi shart' });
+    }
+
+    const updateFields = {
+      isOlympiad: !!isOlympiad,
+      password: isOlympiad ? (password || '').trim() : ''
+    };
+
+    const result = await TestQuestion.updateMany(
+      { testName },
+      { $set: updateFields }
+    );
+
+    res.json({ 
+      message: 'Test sozlamalari muvaffaqiyatli yangilandi', 
+      updatedCount: result.modifiedCount 
+    });
+  } catch (error) {
+    console.error('Error updating test settings:', error);
+    res.status(500).json({ message: 'Test sozlamalarini yangilashda xatolik yuz berdi' });
+  }
+});
+
+
 
 app.get('/api/tests', async (req, res) => {
   try {
     const summary = await TestQuestion.aggregate([
-      { $group: { _id: "$testName", questionCount: { $sum: 1 } } }
+      { 
+        $group: { 
+          _id: "$testName", 
+          questionCount: { $sum: 1 },
+          isOlympiad: { $first: "$isOlympiad" },
+          password: { $first: "$password" }
+        } 
+      }
     ]);
     const tests = summary.map(item => ({
       name: item._id || 'General Test',
-      questionCount: item.questionCount
+      questionCount: item.questionCount,
+      isOlympiad: !!item.isOlympiad,
+      hasPassword: !!(item.password && item.password.trim() !== '')
     })).sort((a, b) => a.name.localeCompare(b.name));
     res.json(tests);
   } catch (error) {
@@ -331,8 +414,19 @@ app.get('/api/tests', async (req, res) => {
 
 app.get('/api/questions', async (req, res) => {
   try {
-    const { testName } = req.query;
+    const { testName, password } = req.query;
     const query = testName ? { testName } : {};
+
+    // Check if password matches if it's an Olympiad test
+    if (testName) {
+      const sampleQuestion = await TestQuestion.findOne({ testName });
+      if (sampleQuestion && sampleQuestion.isOlympiad && sampleQuestion.password && sampleQuestion.password.trim() !== '') {
+        if (sampleQuestion.password.trim() !== (password || '').trim()) {
+          return res.status(401).json({ message: 'Olimpiada testiga kirish paroli noto\'g\'ri!' });
+        }
+      }
+    }
+
     const questions = await TestQuestion.find(query);
     res.json(questions);
   } catch (error) {
@@ -343,12 +437,28 @@ app.get('/api/questions', async (req, res) => {
 
 app.post('/api/questions', adminAuth, async (req, res) => {
   try {
-    const { testName, question, options, correctAnswer } = req.body;
+    const { testName, isOlympiad, password, question, options, correctAnswer } = req.body;
     if (!testName || !testName.trim()) {
       return res.status(400).json({ message: 'Test nomi kiritilishi shart' });
     }
+
+    // Inherit Olympiad settings if test already exists to keep it consistent
+    const existingQuestion = await TestQuestion.findOne({ 
+      testName: { $regex: new RegExp('^' + testName.trim() + '$', 'i') } 
+    });
+
+    let finalIsOlympiad = !!isOlympiad;
+    let finalPassword = isOlympiad ? (password || '').trim() : '';
+
+    if (existingQuestion) {
+      finalIsOlympiad = existingQuestion.isOlympiad;
+      finalPassword = existingQuestion.password;
+    }
+
     const newQuestion = new TestQuestion({ 
       testName: testName.trim(), 
+      isOlympiad: finalIsOlympiad,
+      password: finalPassword,
       question, 
       options, 
       correctAnswer 

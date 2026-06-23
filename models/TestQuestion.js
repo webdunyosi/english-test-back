@@ -7,6 +7,14 @@ const testQuestionSchema = new mongoose.Schema({
     trim: true,
     default: 'General Test'
   },
+  isOlympiad: {
+    type: Boolean,
+    default: false
+  },
+  password: {
+    type: String,
+    default: ''
+  },
   question: {
     type: String,
     required: true,
