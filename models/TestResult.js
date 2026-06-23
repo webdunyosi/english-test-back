@@ -5,6 +5,12 @@ const testResultSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  testName: {
+    type: String,
+    required: true,
+    trim: true,
+    default: 'General Test'
+  },
   score: {
     type: Number,
     required: true,

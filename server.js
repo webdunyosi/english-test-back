@@ -313,9 +313,27 @@ app.delete('/api/questions/:id', adminAuth, async (req, res) => {
 });
 
 
+app.get('/api/tests', async (req, res) => {
+  try {
+    const summary = await TestQuestion.aggregate([
+      { $group: { _id: "$testName", questionCount: { $sum: 1 } } }
+    ]);
+    const tests = summary.map(item => ({
+      name: item._id || 'General Test',
+      questionCount: item.questionCount
+    })).sort((a, b) => a.name.localeCompare(b.name));
+    res.json(tests);
+  } catch (error) {
+    console.error('Error fetching tests summary:', error);
+    res.status(500).json({ message: 'Testlarni yuklashda xatolik yuz berdi' });
+  }
+});
+
 app.get('/api/questions', async (req, res) => {
   try {
-    const questions = await TestQuestion.find();
+    const { testName } = req.query;
+    const query = testName ? { testName } : {};
+    const questions = await TestQuestion.find(query);
     res.json(questions);
   } catch (error) {
     console.error('Error fetching questions:', error);
@@ -325,8 +343,16 @@ app.get('/api/questions', async (req, res) => {
 
 app.post('/api/questions', adminAuth, async (req, res) => {
   try {
-    const { question, options, correctAnswer } = req.body;
-    const newQuestion = new TestQuestion({ question, options, correctAnswer });
+    const { testName, question, options, correctAnswer } = req.body;
+    if (!testName || !testName.trim()) {
+      return res.status(400).json({ message: 'Test nomi kiritilishi shart' });
+    }
+    const newQuestion = new TestQuestion({ 
+      testName: testName.trim(), 
+      question, 
+      options, 
+      correctAnswer 
+    });
     const savedQuestion = await newQuestion.save();
     res.status(201).json(savedQuestion);
   } catch (error) {
@@ -338,11 +364,13 @@ app.post('/api/questions', adminAuth, async (req, res) => {
 // Leaderboard routes
 app.get('/api/results', async (req, res) => {
   try {
+    const { testName } = req.query;
     // Get all approved students
     const students = await User.find({ role: 'student', isApproved: true });
     
-    // Get all test results
-    const results = await TestResult.find();
+    // Get test results filtered by testName if provided
+    const resultsQuery = testName ? { testName } : {};
+    const results = await TestResult.find(resultsQuery);
     
     // Map results to each student
     const leaderboard = students.map(student => {
@@ -405,8 +433,16 @@ app.get('/api/results', async (req, res) => {
 
 app.post('/api/results', async (req, res) => {
   try {
-    const { userName, score, totalQuestions } = req.body;
-    const newResult = new TestResult({ userName, score, totalQuestions });
+    const { userName, testName, score, totalQuestions } = req.body;
+    if (!testName || !testName.trim()) {
+      return res.status(400).json({ message: 'Test nomi kiritilishi shart' });
+    }
+    const newResult = new TestResult({ 
+      userName, 
+      testName: testName.trim(), 
+      score, 
+      totalQuestions 
+    });
     const savedResult = await newResult.save();
     res.status(201).json(savedResult);
   } catch (error) {
